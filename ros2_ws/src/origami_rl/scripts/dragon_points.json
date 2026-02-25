@@ -1,0 +1,57 @@
+{
+  "stage_1_base_creases": {
+    "step_1": {
+      "name": "diagonal_fold_1",
+      "target": [0.075, 0.075, 0.02],
+      "action": "fold_to",
+      "origin": [-0.075, -0.075, 0]
+    },
+    "step_2": {
+      "name": "diagonal_fold_2",
+      "target": [-0.075, 0.075, 0.02],
+      "action": "fold_to",
+      "origin": [0.075, -0.075, 0]
+    }
+  },
+  "stage_2_square_base": {
+    "step_3": {
+      "name": "squash_fold_left",
+      "target": [0.0, 0.035, 0.025],
+      "action": "squash"
+    },
+    "step_4": {
+      "name": "squash_fold_right",
+      "target": [0.0, -0.035, 0.025],
+      "action": "squash"
+    }
+  },
+  "stage_3_bird_base": {
+    "step_5": {
+      "name": "petal_fold_front",
+      "target": [0.0, 0.0, 0.05],
+      "action": "lift_and_flatten"
+    },
+    "step_6": {
+      "name": "petal_fold_back",
+      "target": [0.0, 0.0, 0.05],
+      "action": "lift_and_flatten"
+    }
+  },
+  "stage_4_dragon_features": {
+    "step_7": {
+      "name": "head_reverse_fold",
+      "target": [0.08, 0.0, 0.03],
+      "action": "reverse_fold"
+    },
+    "step_8": {
+      "name": "tail_reverse_fold",
+      "target": [-0.08, 0.0, 0.03],
+      "action": "reverse_fold"
+    },
+    "step_9": {
+      "name": "wing_spread",
+      "target": [0.0, 0.06, 0.04],
+      "action": "pull_out"
+    }
+  }
+}

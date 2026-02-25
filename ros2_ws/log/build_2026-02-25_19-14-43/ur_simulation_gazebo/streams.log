@@ -1,0 +1,24 @@
+[0.045s] Invoking command in '/home/shishir/origami/ros2_ws/build/ur_simulation_gazebo': AMENT_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:/home/shishir/origami_ws/install/origami_ros:/opt/ros/humble /usr/bin/cmake --build /home/shishir/origami/ros2_ws/build/ur_simulation_gazebo -- -j8 -l8
+[0.249s] Invoked command in '/home/shishir/origami/ros2_ws/build/ur_simulation_gazebo' returned '0': AMENT_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:/home/shishir/origami_ws/install/origami_ros:/opt/ros/humble /usr/bin/cmake --build /home/shishir/origami/ros2_ws/build/ur_simulation_gazebo -- -j8 -l8
+[0.259s] Invoking command in '/home/shishir/origami/ros2_ws/build/ur_simulation_gazebo': AMENT_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:/home/shishir/origami_ws/install/origami_ros:/opt/ros/humble /usr/bin/cmake --install /home/shishir/origami/ros2_ws/build/ur_simulation_gazebo
+[0.301s] -- Install configuration: ""
+[0.302s] -- Execute custom install script
+[0.304s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/config/ur_controllers.yaml
+[0.306s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/launch/ur_sim_control.launch.py
+[0.308s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/launch/ur_sim_moveit.launch.py
+[0.309s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ament_index/resource_index/package_run_dependencies/ur_simulation_gazebo
+[0.310s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ament_index/resource_index/parent_prefix_path/ur_simulation_gazebo
+[0.311s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/environment/ament_prefix_path.sh
+[0.314s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/environment/ament_prefix_path.dsv
+[0.317s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/environment/path.sh
+[0.319s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/environment/path.dsv
+[0.320s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/local_setup.bash
+[0.321s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/local_setup.sh
+[0.324s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/local_setup.zsh
+[0.326s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/local_setup.dsv
+[0.328s] -- Symlinking: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/package.dsv
+[0.376s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ament_index/resource_index/packages/ur_simulation_gazebo
+[0.376s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/cmake/ur_simulation_gazeboConfig.cmake
+[0.377s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/cmake/ur_simulation_gazeboConfig-version.cmake
+[0.381s] -- Up-to-date symlink: /home/shishir/origami/ros2_ws/install/ur_simulation_gazebo/share/ur_simulation_gazebo/package.xml
+[0.395s] Invoked command in '/home/shishir/origami/ros2_ws/build/ur_simulation_gazebo' returned '0': AMENT_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/shishir/origami/ros2_ws/install/ur_description:/home/shishir/origami_ws/install/origami_ros:/opt/ros/humble /usr/bin/cmake --install /home/shishir/origami/ros2_ws/build/ur_simulation_gazebo
