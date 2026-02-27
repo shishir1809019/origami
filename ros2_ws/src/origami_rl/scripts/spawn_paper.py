@@ -5,11 +5,10 @@ def main():
     rclpy.init()
     node = rclpy.create_node('paper_spawner')
     client = node.create_client(SpawnEntity, '/spawn_entity')
-    
-    while not client.wait_for_service(timeout_sec=1.0):
-        node.get_logger().info('Service not available, waiting...')
 
-    # Simple URDF for a 15cm x 15cm white square
+    while not client.wait_for_service(timeout_sec=1.0):
+        node.get_logger().info('Waiting for /spawn_entity service...')
+
     paper_xml = """
     <robot name="origami_paper">
       <link name="link">
@@ -39,11 +38,23 @@ def main():
 
     request = SpawnEntity.Request()
     request.name = "origami_paper"
-    request.xml = paper_xml
-    request.initial_pose.position.z = 0.02 # Slightly above ground
-    
-    client.call_async(request)
-    node.get_logger().info('Paper spawn requested!')
+    request.xml  = paper_xml
+
+    # FIX: table surface is at z=0.75, paper half-thickness=0.0025
+    # so paper top sits at z = 0.75 + 0.0025 = 0.7525
+    request.initial_pose.position.x = 0.0
+    request.initial_pose.position.y = 0.0
+    request.initial_pose.position.z = 0.7525
+
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=3.0)
+
+    if future.result() is not None:
+        node.get_logger().info('Paper spawned on table successfully!')
+    else:
+        node.get_logger().error('Failed to spawn paper!')
+
+    node.destroy_node()
     rclpy.shutdown()
 
 if __name__ == "__main__":
