@@ -1,301 +1,239 @@
-"""
-origami_env.py  —  FIXED VERSION
-=================================
-Bug fixes applied:
-  1. next_step() was called TWICE per success → skipped every other goal  [FIXED]
-  2. check_collision() only checked z-height → robots crashed freely      [FIXED]
-  3. Reward had no shaping → robots stuck far from goal                   [FIXED]
-  4. Terminated flag never reset the goal properly                        [FIXED]
-  5. Active goal not updated after first reset                            [FIXED]
-"""
-
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import rclpy
-from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from sensor_msgs.msg import JointState
 from task_manager import TaskManager
 from utils import get_ee_position
 from gazebo_msgs.srv import DeleteEntity, SpawnEntity
+from std_srvs.srv import Empty
 import os
-import time
 
+MIN_EE_Z     = 0.02
+MIN_ARM_DIST = 0.08
+SUCCESS_DIST = 0.20   # LARGE threshold — robots must experience success early
+MAX_STEPS    = 500    # More steps per episode
 
-# ── Workspace / safety constants ─────────────────────────────────────────────
-MIN_EE_Z          = 0.02    # metres — floor safety limit
-MIN_ARM_DIST      = 0.12    # metres — minimum end-effector separation
-SUCCESS_DIST_XY   = 0.08    # metres — XY threshold to count fold as done
-MAX_STEPS_PER_GOAL= 400     # truncate episode if goal not reached
-
+R1_JOINTS = [
+    "robot1_shoulder_pan_joint", "robot1_shoulder_lift_joint",
+    "robot1_elbow_joint",        "robot1_wrist_1_joint",
+    "robot1_wrist_2_joint",      "robot1_wrist_3_joint",
+]
+R2_JOINTS = [
+    "robot2_shoulder_pan_joint", "robot2_shoulder_lift_joint",
+    "robot2_elbow_joint",        "robot2_wrist_1_joint",
+    "robot2_wrist_2_joint",      "robot2_wrist_3_joint",
+]
 
 class MultiUr5OrigamiEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self):
         super().__init__()
-
-        # ── Task manager ─────────────────────────────────────────────────────
         json_path = os.path.expanduser(
-            "~/origami/ros2_ws/src/origami_rl/scripts/dragon_points.json"
-        )
+            "~/origami/ros2_ws/src/origami_rl/scripts/dragon_points.json")
         self.task_manager = TaskManager(json_path)
-        self.active_goal   = self._read_goal()          # np.array [x,y,z]
+        self._update_goals()
 
-        # ── Spaces ───────────────────────────────────────────────────────────
-        # obs = 12 joint angles  +  3 goal coords  +  3 r1_ee  +  3 r2_ee = 21
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32
-        )
-        # action = 12 joint-angle deltas, clipped to ±0.02 rad
+            low=-np.inf, high=np.inf, shape=(24,), dtype=np.float32)
         self.action_space = spaces.Box(
-            low=-0.02, high=0.02, shape=(12,), dtype=np.float32
-        )
+            low=-0.05, high=0.05, shape=(12,), dtype=np.float32)
 
-        # ── ROS 2 setup ──────────────────────────────────────────────────────
         if not rclpy.ok():
             rclpy.init()
         self.node = rclpy.create_node("rl_env_node")
         self.pub1 = self.node.create_publisher(
             JointTrajectory,
-            "/robot1_joint_trajectory_controller/joint_trajectory", 10
-        )
+            "/robot1_joint_trajectory_controller/joint_trajectory", 10)
         self.pub2 = self.node.create_publisher(
             JointTrajectory,
-            "/robot2_joint_trajectory_controller/joint_trajectory", 10
-        )
+            "/robot2_joint_trajectory_controller/joint_trajectory", 10)
         self.deleter = self.node.create_client(DeleteEntity, "delete_entity")
         self.spawner = self.node.create_client(SpawnEntity,  "spawn_entity")
+        self._pause   = self.node.create_client(Empty, "/gazebo/pause_physics")
+        self._unpause = self.node.create_client(Empty, "/gazebo/unpause_physics")
 
-        # ── Internal state ───────────────────────────────────────────────────
+        self._actual_joints        = np.zeros(12, dtype=np.float32)
+        self._joint_state_received = False
+        self._js_name_to_idx       = {}
+
+        self.node.create_subscription(
+            JointState, "/joint_states", self._joint_state_cb, 10)
+
         self._home_joints = np.array([
-            0.0, -1.57, 1.57, -1.57, -1.57, 0.0,   # Robot 1 — reaches forward
-            0.0, -1.57, 1.57, -1.57, -1.57, 0.0,   # Robot 2 — reaches forward
+            0.496, -1.191, -2.707, -1.57, -1.57, 0.0,
+            0.496, -1.191, -2.707, -1.57, -1.57, 0.0,
         ], dtype=np.float32)
 
         self.current_joints = self._home_joints.copy()
-        self._step_count    = 0                         # steps within current goal
-        self._prev_dist     = None                      # for progress shaping
+        self._step_count    = 0
+        self._prev_dist_r1  = None
+        self._prev_dist_r2  = None
+        self._joint_limits  = [6.28, 6.28, 3.14, 6.28, 6.28, 6.28]
 
-    # ── Helpers ──────────────────────────────────────────────────────────────
+        # Curriculum: start easy, get harder
+        self.success_dist = 0.13
 
-    def _read_goal(self) -> np.ndarray:
-        """Read current target from TaskManager (safe wrapper)."""
-        try:
-            data = self.task_manager.get_current_step_data()
-            return np.array(data["target"], dtype=np.float32)
-        except Exception:
-            return np.zeros(3, dtype=np.float32)
+    def _joint_state_cb(self, msg: JointState):
+        if not self._js_name_to_idx:
+            all_joints = R1_JOINTS + R2_JOINTS
+            for i, name in enumerate(all_joints):
+                if name in msg.name:
+                    self._js_name_to_idx[name] = (i, msg.name.index(name))
+        for internal_idx, msg_idx in self._js_name_to_idx.values():
+            self._actual_joints[internal_idx] = msg.position[msg_idx]
+        self._joint_state_received = True
+
+    def _wait_for_joint_states(self, timeout=2.0):
+        import time; t0 = time.time()
+        while not self._joint_state_received and (time.time()-t0) < timeout:
+            rclpy.spin_once(self.node, timeout_sec=0.1)
+
+    def _sync_joints(self):
+        rclpy.spin_once(self.node, timeout_sec=0.05)
+        if self._joint_state_received:
+            self.current_joints = self._actual_joints.copy()
+
+    def _update_goals(self):
+        self.goal_r1 = self.task_manager.get_target_r1()
+        self.goal_r2 = self.task_manager.get_target_r2()
 
     def _get_ee(self):
         r1 = get_ee_position(self.current_joints[0:6],  robot_id=1)
         r2 = get_ee_position(self.current_joints[6:12], robot_id=2)
         return r1, r2
 
-    def _get_obs(self) -> np.ndarray:
-        r1_ee, r2_ee = self._get_ee()
+    def _get_obs(self):
+        r1, r2 = self._get_ee()
         return np.concatenate([
-            self.current_joints,   # 12
-            self.active_goal,      # 3
-            r1_ee,                 # 3
-            r2_ee,                 # 3
+            self.current_joints, self.goal_r1, self.goal_r2, r1, r2
         ]).astype(np.float32)
 
-    # ── Collision checker  (FIX #2) ──────────────────────────────────────────
-    def check_collision(self, joints: np.ndarray) -> bool:
-        """
-        Returns True (unsafe) if:
-          • either EE is below the floor
-          • EE separation is under MIN_ARM_DIST
-        Uses get_ee_position so it's consistent with the reward calculation.
-        """
-        if np.all(joints == 0):
-            return False
+    def _sim(self, pause):
+        svc = self._pause if pause else self._unpause
+        if svc.service_is_ready():
+            svc.call_async(Empty.Request())
+            rclpy.spin_once(self.node, timeout_sec=0.01)
 
+    def check_collision(self, joints):
         r1 = get_ee_position(joints[0:6],  robot_id=1)
         r2 = get_ee_position(joints[6:12], robot_id=2)
-
-        # Floor check
-        if r1[2] < MIN_EE_Z or r2[2] < MIN_EE_Z:
-            return True
-
-        # Arms-too-close check  ← NEW
-        if np.linalg.norm(r1 - r2) < MIN_ARM_DIST:
-            return True
-
+        if r1[2] < MIN_EE_Z or r2[2] < MIN_EE_Z: return True
+        if np.linalg.norm(r1-r2) < MIN_ARM_DIST:  return True
         return False
 
-    # ── Reward  (FIX #3 — shaped reward) ─────────────────────────────────────
-    def _compute_reward(self, r1: np.ndarray, r2: np.ndarray, collision: bool) -> float:
-        """
-        Shaped reward so robots get continuous gradient toward the goal:
-          • strong collision penalty
-          • distance-progress bonus (gets larger the closer they are)
-          • success bonus when close enough
-        """
-        if collision:
-            return -20.0
+    def _compute_reward(self, r1, r2):
+        d1 = float(np.linalg.norm(r1 - self.goal_r1))
+        d2 = float(np.linalg.norm(r2 - self.goal_r2))
+        reward = 0.0
 
-        goal = self.active_goal
-        dist1 = float(np.linalg.norm(r1 - goal))
-        dist2 = float(np.linalg.norm(r2 - goal))
-        dist_sum = dist1 + dist2
+        # Strong progress signal
+        if self._prev_dist_r1 is not None:
+            reward += (self._prev_dist_r1 - d1) * 50.0
+        if self._prev_dist_r2 is not None:
+            reward += (self._prev_dist_r2 - d2) * 50.0
 
-        # Base: negative distance (continuous gradient)
-        reward = -dist_sum
+        self._prev_dist_r1 = d1
+        self._prev_dist_r2 = d2
 
-        # Progress shaping: bonus for getting closer than last step
-        if self._prev_dist is not None:
-            delta = self._prev_dist - dist_sum
-            reward += 5.0 * delta          # amplify the gradient
+        # Small proximity bonus only very close to goal
+        if d1 < 0.15: reward += (0.15 - d1) * 3.0
+        if d2 < 0.15: reward += (0.15 - d2) * 3.0
 
-        self._prev_dist = dist_sum
-
-        # Proximity bonus: scale up sharply near goal
-        close_bonus = max(0.0, 0.3 - dist_sum) * 30.0
-        reward += close_bonus
-
-        # Keep robots apart (soft penalty)
-        arm_sep = float(np.linalg.norm(r1 - r2))
-        if arm_sep < MIN_ARM_DIST * 1.5:
-            reward -= 5.0 * (1.0 - arm_sep / (MIN_ARM_DIST * 1.5))
-
-        # Success bonus  (extra, step() adds more below)
-        dist_xy1 = float(np.linalg.norm(r1[:2] - goal[:2]))
-        dist_xy2 = float(np.linalg.norm(r2[:2] - goal[:2]))
-        if dist_xy1 < SUCCESS_DIST_XY and dist_xy2 < SUCCESS_DIST_XY:
-            reward += 50.0
+        # Collision penalty
+        if np.linalg.norm(r1-r2) < MIN_ARM_DIST * 1.5:
+            reward -= 2.0
 
         return float(reward)
 
-    # ── step()  (FIX #1 — double next_step removed) ──────────────────────────
-    def step(self, action: np.ndarray):
+    def step(self, action):
         self._step_count += 1
-
-        # Predict next joints
         next_joints = self.current_joints + action
 
-        # Safety check
-        collision = self.check_collision(next_joints)
-        if collision:
-            obs = self._get_obs()
-            return obs, -20.0, False, False, {"status": "collision_blocked"}
+        for i in range(6):
+            next_joints[i]   = float(np.clip(next_joints[i],
+                               -self._joint_limits[i], self._joint_limits[i]))
+            next_joints[i+6] = float(np.clip(next_joints[i+6],
+                               -self._joint_limits[i], self._joint_limits[i]))
 
-        # Apply action
-        self.current_joints = next_joints.astype(np.float32)
-        self.publish_trajectory(self.current_joints)
+        if self.check_collision(next_joints):
+            return self._get_obs(), -2.0, False, False, {"status": "collision"}
 
-        # Allow ROS to deliver the command
-        rclpy.spin_once(self.node, timeout_sec=0.01)
+        self._sim(pause=False)
+        self.publish_trajectory(next_joints)
+        rclpy.spin_once(self.node, timeout_sec=0.1)
+        self._sync_joints()
+        self._sim(pause=True)
 
-        # Compute positions & reward
-        r1_ee, r2_ee = self._get_ee()
-        reward = self._compute_reward(r1_ee, r2_ee, collision=False)
+        r1, r2  = self._get_ee()
+        reward  = self._compute_reward(r1, r2)
+        d1      = float(np.linalg.norm(r1 - self.goal_r1))
+        d2      = float(np.linalg.norm(r2 - self.goal_r2))
 
-        # ── Success check ────────────────────────────────────────────────────
-        dist_xy1 = float(np.linalg.norm(r1_ee[:2] - self.active_goal[:2]))
-        dist_xy2 = float(np.linalg.norm(r2_ee[:2] - self.active_goal[:2]))
         terminated = False
-        info = {}
+        info       = {}
 
-        if dist_xy1 < SUCCESS_DIST_XY and dist_xy2 < SUCCESS_DIST_XY:
-            step_data = self.task_manager.get_current_step_data()
-            print(f"✅ FOLD DONE: {step_data.get('name','?')}  reward={reward:.2f}")
-
-            # Visual feedback
+        if d1 < self.success_dist and d2 < self.success_dist:
+            name = self.task_manager.get_current_step_data().get('name','?')
+            print(f"✅ FOLD: {name}  d1={d1:.3f} d2={d2:.3f} thresh={self.success_dist:.2f}")
+            reward += 10.0
             self.spawn_next_origami_shape(self.task_manager.current_stage_idx)
-
-            # FIX #1: call next_step() ONCE only
-            finished = not self.task_manager.next_step()
-
-            if finished:
+            if not self.task_manager.next_step():
                 print("🐉 DRAGON COMPLETE!")
                 terminated = True
                 info["origami_complete"] = True
             else:
-                # Update goal the agent will see next step
-                self.active_goal  = self._read_goal()
-                self._prev_dist   = None
-                self._step_count  = 0
-                print(f"  ➜ Next goal: {self.active_goal}")
+                self._update_goals()
+                self._prev_dist_r1 = None
+                self._prev_dist_r2 = None
+                self._step_count   = 0
 
-        # ── Truncation (timeout per goal) ────────────────────────────────────
-        truncated = self._step_count >= MAX_STEPS_PER_GOAL
-
+        truncated = self._step_count >= MAX_STEPS
         return self._get_obs(), reward, terminated, truncated, info
 
-    # ── reset() ──────────────────────────────────────────────────────────────
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-
-        # FIX #5: always re-sync goal from task_manager on reset
-        self.current_joints = self._home_joints.copy()
-        self.publish_trajectory(self.current_joints)
-        rclpy.spin_once(self.node, timeout_sec=0.1)
-
-        self.active_goal  = self._read_goal()
-        self._prev_dist   = None
-        self._step_count  = 0
-
+        self._sim(pause=False)
+        self.publish_trajectory(self._home_joints)
+        self._wait_for_joint_states()
+        self._sync_joints()
+        self._sim(pause=True)
+        self._update_goals()
+        self._prev_dist_r1 = None
+        self._prev_dist_r2 = None
+        self._step_count   = 0
         return self._get_obs(), {}
 
-    # ── publish_trajectory() ─────────────────────────────────────────────────
-    def publish_trajectory(self, joints: np.ndarray):
-        """Send 12-value joint command to both UR5 controllers."""
-
-        def _make_msg(names, positions):
-            msg   = JointTrajectory()
+    def publish_trajectory(self, joints):
+        def _msg(names, positions):
+            msg = JointTrajectory()
             msg.joint_names = names
-            pt    = JointTrajectoryPoint()
+            pt  = JointTrajectoryPoint()
             pt.positions  = [float(v) for v in positions]
             pt.velocities = [0.0] * 6
-            pt.time_from_start.nanosec = 200_000_000   # 0.2 s
+            pt.time_from_start.nanosec = 100_000_000
             msg.points.append(pt)
             return msg
+        self.pub1.publish(_msg(R1_JOINTS, joints[0:6]))
+        self.pub2.publish(_msg(R2_JOINTS, joints[6:12]))
 
-        self.pub1.publish(_make_msg(
-            ["robot1_shoulder_pan_joint", "robot1_shoulder_lift_joint",
-             "robot1_elbow_joint",        "robot1_wrist_1_joint",
-             "robot1_wrist_2_joint",      "robot1_wrist_3_joint"],
-            joints[0:6]
-        ))
-        self.pub2.publish(_make_msg(
-            ["robot2_shoulder_pan_joint", "robot2_shoulder_lift_joint",
-             "robot2_elbow_joint",        "robot2_wrist_1_joint",
-             "robot2_wrist_2_joint",      "robot2_wrist_3_joint"],
-            joints[6:12]
-        ))
-
-    # ── spawn_next_origami_shape() ───────────────────────────────────────────
-    def spawn_next_origami_shape(self, stage_idx: int):
-        # Delete old paper
-        req_del      = DeleteEntity.Request()
-        req_del.name = "origami_paper"
-        future       = self.deleter.call_async(req_del)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.5)
-
-        # Spawn new (thicker to show progress)
-        thickness = 0.005 + 0.005 * (stage_idx + 1)
-        xml = f"""
-<robot name="origami_paper">
-  <link name="link">
-    <visual>
-      <geometry><box size="0.15 0.15 {thickness:.4f}"/></geometry>
-      <material><color rgba="1.0 1.0 0.9 1.0"/></material>
-    </visual>
-    <collision>
-      <geometry><box size="0.15 0.15 {thickness:.4f}"/></geometry>
-    </collision>
-    <inertial>
-      <mass value="0.01"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
-    </inertial>
-  </link>
-</robot>"""
-
-        req_sp               = SpawnEntity.Request()
-        req_sp.name          = "origami_paper"
-        req_sp.xml           = xml
-        req_sp.initial_pose.position.z = 0.02
-        self.spawner.call_async(req_sp)
-        rclpy.spin_once(self.node, timeout_sec=0.2)
+    def spawn_next_origami_shape(self, stage_idx):
+        req = DeleteEntity.Request()
+        req.name = "origami_paper"
+        rclpy.spin_until_future_complete(
+            self.node, self.deleter.call_async(req), timeout_sec=0.5)
+        t   = 0.005 + 0.005*(stage_idx+1)
+        xml = f"""<robot name="origami_paper"><link name="link">
+          <visual><geometry><box size="0.15 0.15 {t:.4f}"/></geometry></visual>
+          <collision><geometry><box size="0.15 0.15 {t:.4f}"/></geometry></collision>
+          <inertial><mass value="0.01"/>
+          <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+          </inertial></link></robot>"""
+        req2 = SpawnEntity.Request()
+        req2.name = "origami_paper"
+        req2.xml  = xml
+        req2.initial_pose.position.z = 0.001
+        self.spawner.call_async(req2)
+        rclpy.spin_once(self.node, timeout_sec=0.1)
