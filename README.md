@@ -23,7 +23,7 @@ This project implements a centralized PPO (Proximal Policy Optimization) policy 
 - VecNormalize for stable reward scaling
 - TensorBoard logging
 
-**Demo Video:** [YouTube Link]
+<!-- **Demo Video:** [YouTube Link] -->
 
 ---
 
