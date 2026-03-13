@@ -1,4 +1,4 @@
-# 🐉 Multi-Agent Reinforcement Learning for Cooperative Origami Folding
+# Multi-Agent Reinforcement Learning for Cooperative Origami Folding
 
 [![ROS2](https://img.shields.io/badge/ROS2-Humble-blue)](https://docs.ros.org/en/humble/)
 [![Gazebo](https://img.shields.io/badge/Gazebo-Classic%2011-orange)](http://gazebosim.org/)
